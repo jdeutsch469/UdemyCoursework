@@ -21,8 +21,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "main.h"
-#include "TestControlBlock.h"
+#include "TaskControlBlock.h"
 #include "Node.h"
+
+
 #if !defined(__SOFT_FP__) && defined(__ARM_FP)
   #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
@@ -38,70 +40,86 @@ void idle_task(void);
 void enable_processor_faults(void);
 void init_systic_timer(uint32_t tick_hz); //Prototype for systick timer initialization
 __attribute__ ((naked)) void init_scheduler_stack(uint32_t sched_top_of_stack); // prototype for initializing scheduler
-void init_tasks_stack(void);
+void init_tasks_stack(Node * myNode);
 uint32_t get_psp_value(void);
 void switch_sp_to_psp(void);
 void save_psp_value(uint32_t stack_addr);
-void update_next_task(void);
+void update_next_task(Node *);
 void task_delay(uint32_t tick_count);
 void schedule(void);
 
-//uint32_t current_task = 1;
 uint32_t g_tick_count = 0;
 
-// Global Variables - compile time initialization vs runtime initialization
-//Not wasting time to initialize data
-static TCB_t p1_tasks[2]= {
-	{.psp_value=T1_STACK_START,
+/*Linked Lists*/
+struct Node * myCurrentTCB = NULL;
+struct Node * p1_tasks = NULL;
+struct Node * p2_tasks = NULL;
+struct Node * p3_tasks = NULL;
+
+/* Task Control Blocks*/
+
+TCB_t task1 ={
+	.psp_value=T1_STACK_START,
 	.current_state = TASK_READY_STATE,
 	.block_count = 0,
 	.task_priority = 1,
 	.task_handler = task1_handler
-	},
-	{.psp_value=T3_STACK_START,
+};
+TCB_t task3 = {
+	.psp_value=T3_STACK_START,
 	.current_state = TASK_READY_STATE,
 	.block_count = 0,
 	.task_priority = 1,
-	.task_handler = task3_handler}
+	.task_handler = task3_handler
 };
 
-static TCB_t p2_tasks[2]={
-	{.psp_value=T2_STACK_START,
+TCB_t task2={
+	.psp_value=T2_STACK_START,
 	.current_state = TASK_READY_STATE,
 	.block_count = 0,
 	.task_priority = 2,
-	.task_handler = task2_handler},
-	{.psp_value=T4_STACK_START,
+	.task_handler = task2_handler};
+TCB_t task4={
+	.psp_value=T4_STACK_START,
 	.current_state = TASK_READY_STATE,
 	.block_count = 0,
 	.task_priority = 2,
-	.task_handler = task4_handler}
+	.task_handler = task4_handler
 };
-static TCB_t p3_tasks[1]={
-	{.psp_value=IDLE_STACK_START,
+TCB_t taskidle={
+	.psp_value=IDLE_STACK_START,
 	.current_state = TASK_READY_STATE,
 	.block_count = 0,
 	.task_priority = 3,
-	.task_handler = idle_task}
+	.task_handler = idle_task
 };
 
-struct Node *head = NULL;
+
+
+
 
 int main(void)
 {
-	insertNode(&head, p1_tasks[0]);
-	insertNode(&head, p1_tasks[1]);
-	insertNode(&head, p2_tasks[0]);
-	insertNode(&head, p2_tasks[1]);
-	insertNode(&head, p3_tasks[0]);
+	/*Insert nodes into priority linked lists*/
+	insertNode(&p1_tasks, task1);
+	insertNode(&p1_tasks, task3);
+	insertNode(&p2_tasks, task2);
+	insertNode(&p2_tasks, task4);
+	insertNode(&p3_tasks, taskidle);
 
-	/*printf("Priority Linked List:\n");
-	printList(head);*/
-	enable_processor_faults(); // No changes from previous code
+	/*Enable Faults*/
+	enable_processor_faults();
 
-	init_scheduler_stack(SCHED_STACK_START); // removed
+	/*initialize scheduler stack*/
+	init_scheduler_stack(SCHED_STACK_START);
 
-	init_tasks_stack();
+	/*Init the stack for each task*/
+	init_tasks_stack(p1_tasks);
+	init_tasks_stack(p1_tasks->next);
+	init_tasks_stack(p2_tasks);
+	init_tasks_stack(p2_tasks->next);
+	init_tasks_stack(p3_tasks);
+
 
 	led_init_all();
 
@@ -109,15 +127,15 @@ int main(void)
 
 	switch_sp_to_psp();
 
+	myCurrentTCB = p1_tasks;
 	task1_handler();
 
 	for(;;);
 }
-
 void idle_task(void){
 	while(1){
 
-	};
+	}
 }
 
 void task1_handler(void){
@@ -180,22 +198,40 @@ void update_global_tick_count(void){
 	g_tick_count++;
 }
 
-void unblock_tasks(void){
-	Node* current = head;
-	while (current->next != NULL){
-		if(current->taskControlBlock.current_state != TASK_READY_STATE){
-					if(current->taskControlBlock.block_count == g_tick_count){
-						current->taskControlBlock.current_state = TASK_READY_STATE;
-					}
-				}
-	current = current->next;
+/* Pass a pointer to the linked list and run multiple times*/
+void unblock_tasks(Node * myList){
+	//Find out Length of Linked List
+	/*uint8_t listLength = 0;
+	Node *temp = myList;
+	while(temp!=NULL){
+		listLength++;
+		temp = temp->next;
 	}
+	printf("Linked List Length is: %d\n", listLength);
+	*/
+	Node *temp = myList;
+	while (temp != NULL){
+		if((temp->taskControlBlock).current_state != TASK_READY_STATE){
+			if((temp->taskControlBlock).block_count>=g_tick_count)
+				(temp->taskControlBlock).current_state = TASK_READY_STATE;
+		}
+	}
+	/*
+	for (int i=1; i<MAX_TASKS; i++){
+		if(user_tasks[i].current_state != TASK_READY_STATE){
+			if(user_tasks[i].block_count == g_tick_count){
+				user_tasks[i].current_state = TASK_READY_STATE;
+			}
+		}
+	}*/
 }
 
 void SysTick_Handler(void){
 	uint32_t *pICSR = (uint32_t*) 0xE000ED04;
 	update_global_tick_count();
-	unblock_tasks();
+	unblock_tasks(p1_tasks);
+	unblock_tasks(p2_tasks);
+	unblock_tasks(p3_tasks);
 	*pICSR |= (1<<28);
 }
 __attribute__ ((naked)) void PendSV_Handler(void){
@@ -206,7 +242,7 @@ __attribute__ ((naked)) void PendSV_Handler(void){
 	__asm volatile ("BL save_psp_value"); // save current value of PSP
 
 	//Retrieve next task status
-	__asm volatile ("BL update_next_task"); //choose next task to run - round robin
+	__asm volatile ("BL update_next_task"); //choose next task to run from p1_tasks
 	__asm volatile ("BL get_psp_value");
 
 	__asm volatile ("LDMIA R0!, {R4-R11}"); // retrieve SF2
@@ -220,30 +256,45 @@ __attribute__ ((naked)) void init_scheduler_stack(uint32_t schedulerStackStart){
 	__asm volatile("BX LR");
 }
 
-void init_tasks_stack(void){
+void init_tasks_stack(Node * myNode){
+	/* REMOVED - Task Control Blocks are initialized at compile time
+	user_tasks[0].current_state = TASK_READY_STATE;
+	user_tasks[1].current_state = TASK_READY_STATE;
+	user_tasks[2].current_state = TASK_READY_STATE;
+	user_tasks[3].current_state = TASK_READY_STATE;
+	user_tasks[4].current_state = TASK_READY_STATE;
+
+	user_tasks[0].psp_value = IDLE_STACK_START;
+	user_tasks[1].psp_value = T1_STACK_START;
+	user_tasks[2].psp_value = T2_STACK_START;
+	user_tasks[3].psp_value = T3_STACK_START;
+	user_tasks[4].psp_value = T4_STACK_START;
+
+	user_tasks[0].task_handler = idle_task;
+	user_tasks[1].task_handler = task1_handler;
+	user_tasks[2].task_handler = task2_handler;
+	user_tasks[3].task_handler = task3_handler;
+	user_tasks[4].task_handler = task4_handler;
+	*/
+
 	uint32_t * pPSP;
-	struct Node* current = head;
-	while (current->next != NULL){
-		pPSP = (uint32_t *) current->taskControlBlock.psp_value;
+	pPSP = (uint32_t *) (myNode->taskControlBlock).psp_value;
 
-		pPSP--; //XPSR
-		*pPSP = DUMMY_XPSR;
+	pPSP--; //XPSR
+	*pPSP = DUMMY_XPSR;
 
-		pPSP--; // PC
-		*pPSP = (uint32_t) current->taskControlBlock.task_handler;
+	pPSP--; // PC
+	*pPSP = (uint32_t) (myNode->taskControlBlock).task_handler;
 
-		pPSP--; // LR
-		*pPSP = 0xFFFFFFFD;
+	pPSP--; // LR
+	*pPSP = 0xFFFFFFFD;
 
-		for(int j=0; j<13; j++){
-			pPSP--;
-			*pPSP = 0x0;
+	for(int j=0; j<13; j++){
+		pPSP--;
+		*pPSP = 0x0;
 
-		}
-		current->taskControlBlock.psp_value= (uint32_t) pPSP;
-
-		current = current->next;
 	}
+	(myNode->taskControlBlock).psp_value= (uint32_t) pPSP;
 }
 
 void enable_processor_faults(void){
@@ -255,12 +306,17 @@ void enable_processor_faults(void){
 
 }
 void save_psp_value(uint32_t stack_addr){
-	(head->taskControlBlock).psp_value = stack_addr;
+	//user_tasks[current_task].psp_value = stack_addr;
+	(myCurrentTCB->taskControlBlock).psp_value = stack_addr;
+
 }
 
+/* Create a pointer to a Node that keeps track of the current task*/
 void task_delay(uint32_t tick_count){
-	(head->taskControlBlock).block_count = g_tick_count + tick_count;
-	(head->taskControlBlock).current_state = TASK_BLOCKED_STATE;
+	//user_tasks[current_task].block_count = g_tick_count + tick_count;
+	(myCurrentTCB->taskControlBlock).block_count = g_tick_count + tick_count;
+	//user_tasks[current_task].current_state = TASK_BLOCKED_STATE;
+	(myCurrentTCB->taskControlBlock).current_state = TASK_BLOCKED_STATE;
 	schedule();
 }
 
@@ -271,18 +327,31 @@ void schedule(void){
 	//}
 
 }
-
-//This will result in an empty task queue
-void update_next_task(void){
-	int state = TASK_BLOCKED_STATE;
-	Node * current = head;
-	while(current->next != NULL){
-			state = (current->taskControlBlock).current_state;
-			if(state == TASK_READY_STATE && (current->taskControlBlock).task_priority !=3){
-				break;
-			}
-			current = current->next;
+/*walk linked list to find current task*/
+void update_next_task(Node * myLinkedList){
+	//int state = TASK_BLOCKED_STATE;
+	Node * temp = myLinkedList;
+	while(temp!=NULL){
+		if((temp->taskControlBlock).current_state ==TASK_READY_STATE){
+			myCurrentTCB = temp;
+			return;
+		}
+		temp = temp->next;
 	}
+
+	myCurrentTCB = p3_tasks;
+	/*for(int i=0; i< (MAX_TASKS); i++){
+		current_task++;
+		current_task %= MAX_TASKS;
+		state = user_tasks[current_task].current_state;
+		if((state == TASK_READY_STATE) && (current_task != 0)){
+			break;
+		}
+	}
+	if(state != TASK_READY_STATE){
+		current_task=0;
+	}*/
+
 }
 
 void HardFault_Handler(void){
@@ -304,7 +373,7 @@ void UsageFault_Handler(void){
 }
 
 uint32_t get_psp_value(void){
-	return (head->taskControlBlock).psp_value;
+	return (myCurrentTCB->taskControlBlock).psp_value;
 }
 
 
@@ -318,6 +387,13 @@ __attribute__ ((naked)) void switch_sp_to_psp(void){
 	__asm volatile ("MSR CONTROL, R0");
 	__asm volatile ("BX LR");
 }
+/*
+void initialize_single_task(TCB_t * myTaskControlBlock, uint32_t myPsp, uint8_t myPriority ){
 
-
-
+	myTaskControlBlock.psp_value = myPsp;
+	myTaskControlBlock.block_count = 0;
+	myTaskControlBlock.current_state = TASK_READY_STATE;
+	myTaskControlBlock.task_priority = myPriority;
+	myTaskControlBlock.task_handler = task1_handler;
+}
+*/
